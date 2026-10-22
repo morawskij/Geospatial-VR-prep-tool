@@ -72,9 +72,8 @@ class DEM (georaster):
         self.S-=self.resY/2.0
         """
         self.x, self.y = self.data.shape      
-        self.pyramid_levels = int(np.log2(max(1,1+self.x/512, 1+self.y/512)))+1
-        print(self.x,self.y,self.pyramid_levels)
-        self.pyramid_extent = Extent(self.extent.W, self.extent.W+self.resX*2**(self.pyramid_levels+8) , self.extent.S, self.extent.S+self.resY*2**(self.pyramid_levels+8))
+        self.pyramid_levels = int(np.ceil(max(0,np.log2(max(self.x/256, self.y/256)))+1))
+        self.pyramid_extent = Extent(self.extent.W, self.extent.W+self.resX*2**(self.pyramid_levels+7) , self.extent.S, self.extent.S+self.resY*2**(self.pyramid_levels+7))
         self.export_folder=export_folder
 
     def prepare(self):
@@ -86,21 +85,21 @@ class DEM (georaster):
             print(f"Generating level {level}")
             step = 2**(self.pyramid_levels-level-1)
             os.makedirs(export_folder + f"/{level}", exist_ok=True)
-            print(step)
-            for x in range(int(1+self.x/(step*512))):
-                for y in range(int(1+self.y/(step*512))):
-                    temp_tile = tile(export_folder,level,x,y)
-                    max_x=min(self.x//step,(x+1)*512)
-                    max_y=min(self.y//step,(y+1)*512)
-                    temp_tile.data[:max_x-x*512,:max_y-y*512] = self.data[x*512*step:max_x*step:step,y*512*step:max_y*step:step]
+            for x in range(int(1+self.x/(step*256))):
+                for y in range(int(1+self.y/(step*256))):
+                    temp_tile = tile(export_folder,level,y,x)
+                    max_x=min(self.x//step,(x+1)*256)
+                    max_y=min(self.y//step,(y+1)*256)
+                    temp_tile.data[:max_x-x*256,:max_y-y*256] = self.data[x*256*step:max_x*step:step,y*256*step:max_y*step:step]
                     temp_tile.export()
 
     def export_metadata(self,metadata_path):
             metadata = {
-                "width": int(512),
-                "height": int(512),
+                "width": int(256),
+                "height": int(256),
                 "mid_h": float(np.nanmean(self.data)),
                 "h_range": float(np.nanmax(self.data) - np.nanmin(self.data)),
+                "pyramid_levels": int(self.pyramid_levels),
                 "dem_resolution_x": float(abs(self.resX)),
                 "dem_resolution_y": float(abs(self.resY)),
                 "west": float(self.extent.W),
@@ -114,7 +113,7 @@ class DEM (georaster):
 
 class tile:
     def __init__(self,export_folder,level,x,y):
-        self.data = np.zeros((512,512))
+        self.data = np.full((256,256), -9999, dtype=np.float32)
         self.export_folder = export_folder
         self.level = level
         self.x = x
@@ -150,8 +149,26 @@ class Texture (georaster):
         super().__init__(file_path)
         self.reference_dem = reference_dem
         self.reproject_extent(self.reference_dem.crs.ExportToWkt())
+        
+        # Convert to uint8 and rescale to 0-255 range once at initialization
+        if len(self.data.shape) == 2:
+            data_min, data_max = self.data.min(), self.data.max()
+            if data_max > data_min:
+                self.data = ((self.data - data_min) / (data_max - data_min) * 255).astype(np.uint8)
+            else:
+                self.data = np.zeros_like(self.data, dtype=np.uint8)
+        elif len(self.data.shape) == 3:
+            data_uint8 = np.zeros_like(self.data, dtype=np.uint8)
+            for i in range(self.data.shape[0]):
+                band = self.data[i]
+                band_min, band_max = band.min(), band.max()
+                if band_max > band_min:
+                    data_uint8[i] = ((band - band_min) / (band_max - band_min) * 255).astype(np.uint8)
+                else:
+                    data_uint8[i] = np.zeros_like(band, dtype=np.uint8)
+            self.data = data_uint8
 
-    def export_cropped(self, output_path, crop_extent, window_size=(512, 512), nodata_value=0):
+    def export_cropped(self, output_path, crop_extent, window_size=(256, 256), nodata_value=0):
         """
         Export texture cropped to specified extent, resampled to window size.
         Areas outside the texture extent are filled with nodata_value.
@@ -165,9 +182,9 @@ class Texture (georaster):
         if crop_extent.check_overlap(self.extent):
             intersect = crop_extent.get_overlap(self.extent)
             if len(self.data.shape) == 2:
-                output_data = np.full(window_size[::-1], nodata_value, dtype=np.float32)
+                output_data = np.full(window_size[::-1], nodata_value, dtype=np.uint8)
             else:
-                output_data = np.full((self.data.shape[0], window_size[1], window_size[0]), nodata_value, dtype=np.float32)
+                output_data = np.full((self.data.shape[0], window_size[1], window_size[0]), nodata_value, dtype=np.uint8)
 
             # Convert geographic coordinates to pixel coordinates
             px_W = int((intersect.W - self.extent.W) / self.resX)
@@ -206,7 +223,7 @@ class Texture (georaster):
                 else:
                     zoom_factors = (1, target_shape[1] / cropped_data.shape[1], target_shape[2] / cropped_data.shape[2])
                 
-                resampled = zoom(cropped_data, zoom_factors, order=1, mode='constant', cval=nodata_value)
+                resampled = zoom(cropped_data.astype(np.float32), zoom_factors, order=1, mode='constant', cval=nodata_value).astype(np.uint8)
                 
                 # Place resampled data in output window
                 if len(self.data.shape) == 2:
@@ -214,33 +231,10 @@ class Texture (georaster):
                 else:
                     output_data[:, out_px_S:out_px_N, out_px_W:out_px_E] = resampled
         
-            # Convert to uint8 and rescale to 0-255 range for valid data
+            # Save as image
             if len(output_data.shape) == 2:
-                data_min, data_max = output_data.min(), output_data.max()
-                if data_max > data_min and data_max != nodata_value:
-                    mask = output_data != nodata_value
-                    if mask.any():
-                        valid_data = output_data[mask]
-                        valid_min, valid_max = valid_data.min(), valid_data.max()
-                        if valid_max > valid_min:
-                            output_data[mask] = (1+(valid_data - valid_min) / (valid_max - valid_min) * 254).astype(np.uint8)
-                        else:
-                            output_data[mask] = np.uint8(255)
-                output_data = output_data.astype(np.uint8)
                 img = Image.fromarray(output_data, mode='L')
             else:
-                for i in range(output_data.shape[0]):
-                    band = output_data[i]
-                    data_min, data_max = band.min(), band.max()
-                    if data_max > data_min and data_max != nodata_value:
-                        mask = band != nodata_value
-                        if mask.any():
-                            valid_data = band[mask]
-                            valid_min, valid_max = valid_data.min(), valid_data.max()
-                            if valid_max > valid_min:
-                                output_data[i][mask] = (1+(valid_data - valid_min) / (valid_max - valid_min) * 254).astype(np.uint8)
-                            else:
-                                output_data[i][mask] = np.uint8(255)
                 data_rgb = np.moveaxis(output_data, 0, -1)
                 img = Image.fromarray(data_rgb, mode='RGB')
             img.save(output_path)
@@ -279,7 +273,7 @@ class TextureFamily:
 
 
 
-def prepare_for_unity(data_folder="PeaceVallis",outputs_folder="/home/kuba/Unity/VR-GIS/VR-GIS/NewUnityProject/Assets/"):
+def prepare_for_unity(data_folder="PeaceVallis",outputs_folder="/home/kuba/Unity/VR-GIS/VR-GIS/NewUnityProject/Assets/StreamingAssets/Projects/"):
     outputs_folder = outputs_folder + data_folder
     os.makedirs(outputs_folder, exist_ok=True)
     folder_path="./Projects/" + data_folder
