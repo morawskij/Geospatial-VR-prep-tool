@@ -72,6 +72,7 @@ class DEM (georaster):
         self.S-=self.resY/2.0
         """
         self.x, self.y = self.data.shape      
+        self.mid_h = float(np.nanmean(self.data))
         self.pyramid_levels = int(np.ceil(max(0,np.log2(max(self.x/256, self.y/256)))+1))
         self.pyramid_extent = Extent(self.extent.W, self.extent.W+self.resX*2**(self.pyramid_levels+7) , self.extent.S, self.extent.S+self.resY*2**(self.pyramid_levels+7))
         self.export_folder=export_folder
@@ -87,17 +88,21 @@ class DEM (georaster):
             os.makedirs(export_folder + f"/{level}", exist_ok=True)
             for x in range(int(1+self.x/(step*256))):
                 for y in range(int(1+self.y/(step*256))):
-                    temp_tile = tile(export_folder,level,y,x)
+                    temp_tile = tile(export_folder,level,y,x,self.mid_h)
                     max_x=min(self.x//step,(x+1)*256)
                     max_y=min(self.y//step,(y+1)*256)
-                    temp_tile.data[:max_x-x*256,:max_y-y*256] = self.data[x*256*step:max_x*step:step,y*256*step:max_y*step:step]
+                    x_stopper = self.x-max_x*step-1
+                    if x_stopper >= 0:
+                        temp_tile.data[:max_x-x*256,:max_y-y*256] = self.data[self.x-x*256*step-1:x_stopper:-step,y*256*step:max_y*step:step]
+                    else:
+                        temp_tile.data[:max_x-x*256,:max_y-y*256] = self.data[self.x-x*256*step-1::-step,y*256*step:max_y*step:step]
                     temp_tile.export()
 
     def export_metadata(self,metadata_path):
             metadata = {
                 "width": int(256),
                 "height": int(256),
-                "mid_h": float(np.nanmean(self.data)),
+                "mid_h": self.mid_h,
                 "h_range": float(np.nanmax(self.data) - np.nanmin(self.data)),
                 "pyramid_levels": int(self.pyramid_levels),
                 "dem_resolution_x": float(abs(self.resX)),
@@ -112,8 +117,8 @@ class DEM (georaster):
                 json.dump(metadata, f, indent=4)
 
 class tile:
-    def __init__(self,export_folder,level,x,y):
-        self.data = np.full((256,256), -9999, dtype=np.float32)
+    def __init__(self,export_folder,level,x,y,mid_h):
+        self.data = np.full((256,256), mid_h, dtype=np.float32)
         self.export_folder = export_folder
         self.level = level
         self.x = x
