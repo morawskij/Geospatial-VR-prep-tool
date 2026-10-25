@@ -73,6 +73,16 @@ class DEM (georaster):
         """
         self.x, self.y = self.data.shape      
         self.mid_h = float(np.nanmean(self.data))
+        
+        # Get NoData value from the raster band
+        band = self.dataset.GetRasterBand(1)
+        nodata_value = band.GetNoDataValue()
+        
+        if nodata_value is not None:
+            self.data = np.where(self.data == nodata_value, self.mid_h, self.data)
+        else:
+            # Fallback to NaN if NoData value is not defined
+            self.data = np.where(np.isnan(self.data), self.mid_h, self.data)
         self.pyramid_levels = int(np.ceil(max(0,np.log2(max(self.x/256, self.y/256)))+1))
         self.pyramid_extent = Extent(self.extent.W, self.extent.W+self.resX*2**(self.pyramid_levels+7) , self.extent.S, self.extent.S+self.resY*2**(self.pyramid_levels+7))
         self.export_folder=export_folder
@@ -290,4 +300,4 @@ def prepare_for_unity(data_folder="PeaceVallis",outputs_folder="/home/kuba/Unity
     textures.recursive_pyramid_generation()
 
 if __name__ == "__main__":
-    prepare_for_unity(data_folder="PeaceVallis")
+    prepare_for_unity(data_folder="Antarctica")
