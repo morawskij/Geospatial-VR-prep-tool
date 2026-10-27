@@ -20,6 +20,8 @@ class georaster:
         self.calculate_extent()
 
         self.data = self.dataset.ReadAsArray()
+        self.x, self.y = self.data.shape     
+        self.pyramid_levels = int(np.ceil(max(0,np.log2(max(self.x/256, self.y/256)))+1))
 
     def calculate_extent(self):
         geotransform = self.dataset.GetGeoTransform()
@@ -70,8 +72,7 @@ class DEM (georaster):
         self.W+=self.resX/2.0
         self.N+=self.resY/2.0
         self.S-=self.resY/2.0
-        """
-        self.x, self.y = self.data.shape      
+        """ 
         self.mid_h = float(np.nanmean(self.data))
         
         # Get NoData value from the raster band
@@ -83,7 +84,6 @@ class DEM (georaster):
         else:
             # Fallback to NaN if NoData value is not defined
             self.data = np.where(np.isnan(self.data), self.mid_h, self.data)
-        self.pyramid_levels = int(np.ceil(max(0,np.log2(max(self.x/256, self.y/256)))+1))
         self.pyramid_extent = Extent(self.extent.W, self.extent.W+self.resX*2**(self.pyramid_levels+7) , self.extent.S, self.extent.S+self.resY*2**(self.pyramid_levels+7))
         self.export_folder=export_folder
 
@@ -160,9 +160,11 @@ class Extent:
         )
 
 class Texture (georaster):
-    def __init__(self, file_path,reference_dem):
+    def __init__(self, file_path,reference_dem,number):
         super().__init__(file_path)
         self.reference_dem = reference_dem
+        self.number = number
+        self.name = os.path.basename(file_path)
         self.reproject_extent(self.reference_dem.crs.ExportToWkt())
         
         # Convert to uint8 and rescale to 0-255 range once at initialization
@@ -182,6 +184,20 @@ class Texture (georaster):
                 else:
                     data_uint8[i] = np.zeros_like(band, dtype=np.uint8)
             self.data = data_uint8
+
+    def export_metadata(self):
+        metadata_path = f"{self.reference_dem.export_folder}/texture_{self.number}_metadata.json"
+        metadata = {
+                "name": self.name,
+                "pyramid_levels": int(self.pyramid_levels),
+                "west": float(self.extent.W),
+                "east": float(self.extent.E),
+                "south": float(self.extent.S),
+                "north": float(self.extent.N),
+            }
+            
+        with open(metadata_path, 'w') as f:
+            json.dump(metadata, f, indent=4)
 
     def export_cropped(self, output_path, crop_extent, window_size=(256, 256), nodata_value=0):
         """
@@ -261,11 +277,13 @@ class TextureFamily:
     def __init__(self,texture_file_list, reference_dem, export_folder):
         self.textures = []
         self.reference_dem = reference_dem
-        for texture_file in texture_file_list:
-            self.textures.append(Texture(texture_file, self.reference_dem))
+        for i,texture_file in enumerate(texture_file_list):
+            self.textures.append(Texture(texture_file, self.reference_dem, i))
         self.export_folder = export_folder
 
-    def recursive_pyramid_generation(self,level=0,x=0,y=0):
+    def recursive_pyramid_generation(self,level=0,x=0,y=0,textures_to_be_treated=None):
+        if textures_to_be_treated is None:
+            textures_to_be_treated = list(range(len(self.textures)))
         os.makedirs(self.export_folder + f"/{level}", exist_ok=True)
         alpha1 = x/2**level
         alpha2 = alpha1+1/2**level
@@ -277,17 +295,19 @@ class TextureFamily:
         N = self.reference_dem.extent.S*(1-beta2)+self.reference_dem.pyramid_extent.N*beta2
         progression_needed = False
         cropping_extent=Extent(W,E,S,N)
-        for i, tex in enumerate(self.textures):
+        for i in textures_to_be_treated.copy():
+            tex = self.textures[i]
             new_flag = tex.export_cropped(self.export_folder+ "/" + str(level) + "/" + str(x) + "_" + str(y) + "_"+ str(i) + ".png",cropping_extent)
+            if not new_flag:
+                textures_to_be_treated.remove(i)
+            else:
+                tex.pyramid_levels = level+2
             progression_needed = progression_needed or new_flag           
         if progression_needed:
             for i in range(2):
                 for j in range(2):
-                    self.recursive_pyramid_generation(level=level+1,x=2*x+i,y=2*y+j)
+                    self.recursive_pyramid_generation(level=level+1,x=2*x+i,y=2*y+j,textures_to_be_treated=textures_to_be_treated.copy())
     
-
-
-
 def prepare_for_unity(data_folder="PeaceVallis",outputs_folder="/home/kuba/Unity/VR-GIS/VR-GIS/NewUnityProject/Assets/StreamingAssets/Projects/"):
     outputs_folder = outputs_folder + data_folder
     os.makedirs(outputs_folder, exist_ok=True)
@@ -298,6 +318,8 @@ def prepare_for_unity(data_folder="PeaceVallis",outputs_folder="/home/kuba/Unity
     dem.prepare()
     textures = TextureFamily(texture_files,dem,outputs_folder)
     textures.recursive_pyramid_generation()
+    for tex in textures.textures:
+        tex.export_metadata()
 
 if __name__ == "__main__":
-    prepare_for_unity(data_folder="Antarctica")
+    prepare_for_unity()#data_folder="Antarctica")
