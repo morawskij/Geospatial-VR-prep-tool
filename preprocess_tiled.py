@@ -87,12 +87,14 @@ class DEM (georaster):
         self.pyramid_extent = Extent(self.extent.W, self.extent.W+self.resX*2**(self.pyramid_levels+7) , self.extent.S, self.extent.S+self.resY*2**(self.pyramid_levels+7))
         self.export_folder=export_folder
 
-    def prepare(self):
-        self.generate_tiles(self.export_folder)
+    def prepare(self,level_limiter=None):
+        self.generate_tiles(self.export_folder,level_limiter=level_limiter)
         self.export_metadata(self.export_folder + "/dem_metadata.json")
 
-    def generate_tiles(self,export_folder):
-        for level in range(self.pyramid_levels):
+    def generate_tiles(self,export_folder,level_limiter=None):
+        if level_limiter is None:
+            level_limiter = self.pyramid_levels
+        for level in range(min(self.pyramid_levels,level_limiter)):
             print(f"Generating level {level}")
             step = 2**(self.pyramid_levels-level-1)
             os.makedirs(export_folder + f"/{level}", exist_ok=True)
@@ -110,8 +112,8 @@ class DEM (georaster):
 
     def export_metadata(self,metadata_path):
             metadata = {
-                "width": int(256),
-                "height": int(256),
+                "width": int(self.x),
+                "height": int(self.y),
                 "mid_h": self.mid_h,
                 "h_range": float(np.nanmax(self.data) - np.nanmin(self.data)),
                 "pyramid_levels": int(self.pyramid_levels),
@@ -281,7 +283,7 @@ class TextureFamily:
             self.textures.append(Texture(texture_file, self.reference_dem, i))
         self.export_folder = export_folder
 
-    def recursive_pyramid_generation(self,level=0,x=0,y=0,textures_to_be_treated=None):
+    def recursive_pyramid_generation(self,level=0,x=0,y=0,textures_to_be_treated=None,level_limiter=None):
         if textures_to_be_treated is None:
             textures_to_be_treated = list(range(len(self.textures)))
         os.makedirs(self.export_folder + f"/{level}", exist_ok=True)
@@ -304,22 +306,24 @@ class TextureFamily:
                 tex.pyramid_levels = level+2
             progression_needed = progression_needed or new_flag           
         if progression_needed:
-            for i in range(2):
-                for j in range(2):
-                    self.recursive_pyramid_generation(level=level+1,x=2*x+i,y=2*y+j,textures_to_be_treated=textures_to_be_treated.copy())
-    
+            if level_limiter is None or level+1 != level_limiter:
+                for i in range(2):
+                    for j in range(2):
+                        self.recursive_pyramid_generation(level=level+1,x=2*x+i,y=2*y+j,textures_to_be_treated=textures_to_be_treated.copy(),level_limiter=level_limiter)
+        
 def prepare_for_unity(data_folder="PeaceVallis",outputs_folder="/home/kuba/Unity/VR-GIS/VR-GIS/NewUnityProject/Assets/StreamingAssets/Projects/"):
+    level_limiter=8#None
     outputs_folder = outputs_folder + data_folder
     os.makedirs(outputs_folder, exist_ok=True)
     folder_path="./Projects/" + data_folder
     DEM_file=folder_path + "/DEM.tif"
     texture_files = glob.glob(folder_path + "/Textures/*.tif")
     dem = DEM(DEM_file, outputs_folder)
-    dem.prepare()
+    dem.prepare(level_limiter=level_limiter)
     textures = TextureFamily(texture_files,dem,outputs_folder)
-    textures.recursive_pyramid_generation()
+    textures.recursive_pyramid_generation(level_limiter=level_limiter)
     for tex in textures.textures:
         tex.export_metadata()
 
 if __name__ == "__main__":
-    prepare_for_unity()#data_folder="Antarctica")
+    prepare_for_unity(data_folder="Antarctica")
