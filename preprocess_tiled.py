@@ -112,8 +112,8 @@ class DEM (georaster):
 
     def export_metadata(self,metadata_path):
             metadata = {
-                "width": int(self.x),
-                "height": int(self.y),
+                "width": int(self.y),
+                "height": int(self.x),
                 "mid_h": self.mid_h,
                 "h_range": float(np.nanmax(self.data) - np.nanmin(self.data)),
                 "pyramid_levels": int(self.pyramid_levels),
