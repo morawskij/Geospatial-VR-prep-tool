@@ -20,6 +20,9 @@ class georaster:
         self.calculate_extent()
 
         self.data = self.dataset.ReadAsArray()
+        # Get NoData value from the raster band
+        band = self.dataset.GetRasterBand(1)
+        self.nodata_value = band.GetNoDataValue()
         self.x, self.y = self.data.shape     
         self.pyramid_levels = int(np.ceil(max(0,np.log2(max(self.x/256, self.y/256)))+1))
 
@@ -75,12 +78,8 @@ class DEM (georaster):
         """ 
         self.mid_h = float(np.nanmean(self.data))
         
-        # Get NoData value from the raster band
-        band = self.dataset.GetRasterBand(1)
-        nodata_value = band.GetNoDataValue()
-        
-        if nodata_value is not None:
-            self.data = np.where(self.data == nodata_value, self.mid_h, self.data)
+        if self.nodata_value is not None:
+            self.data = np.where(self.data == self.nodata_value, self.mid_h, self.data)
         else:
             # Fallback to NaN if NoData value is not defined
             self.data = np.where(np.isnan(self.data), self.mid_h, self.data)
@@ -169,6 +168,15 @@ class Texture (georaster):
         self.name = os.path.basename(file_path)
         self.reproject_extent(self.reference_dem.crs.ExportToWkt())
         
+        # Store nodata mask before conversion
+        if self.nodata_value is not None:
+            if len(self.data.shape) == 2:
+                self.nodata_mask = (self.data == self.nodata_value)
+            else:
+                self.nodata_mask = np.any(self.data == self.nodata_value, axis=0)
+        else:
+            self.nodata_mask = np.zeros(self.data.shape[1:] if len(self.data.shape) == 3 else self.data.shape, dtype=bool)
+        
         # Convert to uint8 and rescale to 0-255 range once at initialization
         if len(self.data.shape) == 2:
             data_min, data_max = self.data.min(), self.data.max()
@@ -204,7 +212,7 @@ class Texture (georaster):
     def export_cropped(self, output_path, crop_extent, window_size=(256, 256), nodata_value=0):
         """
         Export texture cropped to specified extent, resampled to window size.
-        Areas outside the texture extent are filled with nodata_value.
+        Areas outside the texture extent or with nodata values have alpha=0.
         
         Args:
             output_path: Path to save the output image
@@ -214,10 +222,9 @@ class Texture (georaster):
         """
         if crop_extent.check_overlap(self.extent):
             intersect = crop_extent.get_overlap(self.extent)
-            if len(self.data.shape) == 2:
-                output_data = np.full(window_size[::-1], nodata_value, dtype=np.uint8)
-            else:
-                output_data = np.full((self.data.shape[0], window_size[1], window_size[0]), nodata_value, dtype=np.uint8)
+            
+            # Initialize output with RGBA (4 channels)
+            output_data = np.zeros((window_size[1], window_size[0], 4), dtype=np.uint8)
 
             # Convert geographic coordinates to pixel coordinates
             px_W = int((intersect.W - self.extent.W) / self.resX)
@@ -234,8 +241,10 @@ class Texture (georaster):
             # Extract the intersecting region
             if len(self.data.shape) == 2:
                 cropped_data = self.data[px_N:px_S, px_W:px_E]
+                cropped_mask = self.nodata_mask[px_N:px_S, px_W:px_E]
             else:
                 cropped_data = self.data[:, px_N:px_S, px_W:px_E]
+                cropped_mask = self.nodata_mask[px_N:px_S, px_W:px_E]
             
             # Calculate where this intersection should be placed in the output window
             crop_width = crop_extent.E - crop_extent.W
@@ -249,27 +258,30 @@ class Texture (georaster):
 
             # Resample cropped data to fit the output region
             if cropped_data.size > 0:
-                target_shape = (out_px_N - out_px_S, out_px_E - out_px_W) if len(self.data.shape) == 2 else (self.data.shape[0], out_px_N - out_px_S, out_px_E - out_px_W)
-                
                 if len(self.data.shape) == 2:
+                    target_shape = (out_px_N - out_px_S, out_px_E - out_px_W)
                     zoom_factors = (target_shape[0] / cropped_data.shape[0], target_shape[1] / cropped_data.shape[1])
+                    resampled = zoom(cropped_data.astype(np.float32), zoom_factors, order=1, mode='constant', cval=nodata_value).astype(np.uint8)
+                    resampled_mask = zoom(cropped_mask.astype(np.float32), zoom_factors, order=0, mode='nearest') > 0.5
+                    # Place in RGB channels (grayscale to RGB)
+                    output_data[out_px_S:out_px_N, out_px_W:out_px_E, 0] = resampled
+                    output_data[out_px_S:out_px_N, out_px_W:out_px_E, 1] = resampled
+                    output_data[out_px_S:out_px_N, out_px_W:out_px_E, 2] = resampled
+                    # Set alpha to 255 for valid data, 0 for nodata
+                    output_data[out_px_S:out_px_N, out_px_W:out_px_E, 3] = np.where(resampled_mask, 0, 255).astype(np.uint8)
                 else:
+                    target_shape = (self.data.shape[0], out_px_N - out_px_S, out_px_E - out_px_W)
                     zoom_factors = (1, target_shape[1] / cropped_data.shape[1], target_shape[2] / cropped_data.shape[2])
-                
-                resampled = zoom(cropped_data.astype(np.float32), zoom_factors, order=1, mode='constant', cval=nodata_value).astype(np.uint8)
-                
-                # Place resampled data in output window
-                if len(self.data.shape) == 2:
-                    output_data[out_px_S:out_px_N, out_px_W:out_px_E] = resampled
-                else:
-                    output_data[:, out_px_S:out_px_N, out_px_W:out_px_E] = resampled
+                    resampled = zoom(cropped_data.astype(np.float32), zoom_factors, order=1, mode='constant', cval=nodata_value).astype(np.uint8)
+                    resampled_mask = zoom(cropped_mask.astype(np.float32), zoom_factors, order=0, mode='nearest') > 0.5
+                    # Place in RGB channels
+                    resampled_rgb = np.moveaxis(resampled, 0, -1)
+                    output_data[out_px_S:out_px_N, out_px_W:out_px_E, :3] = resampled_rgb
+                    # Set alpha to 255 for valid data, 0 for nodata
+                    output_data[out_px_S:out_px_N, out_px_W:out_px_E, 3] = np.where(resampled_mask, 0, 255).astype(np.uint8)
         
-            # Save as image
-            if len(output_data.shape) == 2:
-                img = Image.fromarray(output_data, mode='L')
-            else:
-                data_rgb = np.moveaxis(output_data, 0, -1)
-                img = Image.fromarray(data_rgb, mode='RGB')
+            # Save as RGBA image
+            img = Image.fromarray(output_data, mode='RGBA')
             img.save(output_path)
             return min(zoom_factors)<1
         else:
@@ -312,7 +324,7 @@ class TextureFamily:
                         self.recursive_pyramid_generation(level=level+1,x=2*x+i,y=2*y+j,textures_to_be_treated=textures_to_be_treated.copy(),level_limiter=level_limiter)
         
 def prepare_for_unity(data_folder="PeaceVallis",outputs_folder="/home/kuba/Unity/VR-GIS/VR-GIS/NewUnityProject/Assets/StreamingAssets/Projects/"):
-    level_limiter=8#None
+    level_limiter=10#8#None
     outputs_folder = outputs_folder + data_folder
     os.makedirs(outputs_folder, exist_ok=True)
     folder_path="./Projects/" + data_folder
@@ -326,4 +338,4 @@ def prepare_for_unity(data_folder="PeaceVallis",outputs_folder="/home/kuba/Unity
         tex.export_metadata()
 
 if __name__ == "__main__":
-    prepare_for_unity(data_folder="Antarctica")
+    prepare_for_unity()#data_folder="Antarctica")
