@@ -323,8 +323,8 @@ class TextureFamily:
                     for j in range(2):
                         self.recursive_pyramid_generation(level=level+1,x=2*x+i,y=2*y+j,textures_to_be_treated=textures_to_be_treated.copy(),level_limiter=level_limiter)
         
-def prepare_for_unity(data_folder="PeaceVallis",outputs_folder="/home/kuba/Unity/VR-GIS/VR-GIS/NewUnityProject/Assets/StreamingAssets/Projects/"):
-    level_limiter=10#8#None
+def prepare_for_unity(data_folder="PeaceVallis",outputs_folder="/home/kuba/Unity/VR-GIS/VR-GIS/NewUnityProject/Projects/"):
+    level_limiter=None#10#8#
     outputs_folder = outputs_folder + data_folder
     os.makedirs(outputs_folder, exist_ok=True)
     folder_path="./Projects/" + data_folder
