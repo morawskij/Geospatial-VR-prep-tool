@@ -163,13 +163,14 @@ class Extent:
         )
 
 class Texture (georaster):
-    def __init__(self, file_path,reference_dem,number):
+    def __init__(self, file_path,reference_dem,number,manual_nodata=None):
         super().__init__(file_path)
         self.reference_dem = reference_dem
         self.number = number
         self.name = os.path.basename(file_path)
         self.reproject_extent(self.reference_dem.crs.ExportToWkt())
-        
+        if manual_nodata is not None:
+            self.nodata_value = manual_nodata
         # Store nodata mask before conversion
         if self.nodata_value is not None:
             if len(self.data.shape) == 2:
@@ -285,17 +286,22 @@ class Texture (georaster):
             # Save as RGBA image
             img = Image.fromarray(output_data, mode='RGBA')
             img.save(output_path)
-            return min(zoom_factors)<1
+            return min(zoom_factors)<1, True
         else:
-            return False
+            return False, False
 
 class TextureFamily:
-    def __init__(self,texture_file_list, reference_dem, export_folder):
+    def __init__(self,texture_file_list, reference_dem, export_folder,manual_nodata=None):
+        if manual_nodata is None:
+            manual_nodata = [None]*len(texture_file_list)
         self.textures = []
         self.reference_dem = reference_dem
         for i,texture_file in enumerate(texture_file_list):
-            self.textures.append(Texture(texture_file, self.reference_dem, i))
+            self.textures.append(Texture(texture_file, self.reference_dem, i,manual_nodata=manual_nodata[i]))
         self.export_folder = export_folder
+        self.scope_info = []
+        for i in range(self.reference_dem.pyramid_levels):
+            self.scope_info.append([0,0,2**i,2**i])
 
     def recursive_pyramid_generation(self,level=0,x=0,y=0,textures_to_be_treated=None,level_limiter=None):
         if textures_to_be_treated is None:
@@ -313,7 +319,12 @@ class TextureFamily:
         cropping_extent=Extent(W,E,S,N)
         for i in textures_to_be_treated.copy():
             tex = self.textures[i]
-            new_flag = tex.export_cropped(self.export_folder+ "/" + str(level) + "/" + str(x) + "_" + str(y) + "_"+ str(i) + ".png",cropping_extent)
+            new_flag, succeesul_generation = tex.export_cropped(self.export_folder+ "/" + str(level) + "/" + str(x) + "_" + str(y) + "_"+ str(i) + ".png",cropping_extent)
+            if succeesul_generation:
+                if level<len(self.scope_info):
+                    self.scope_info[level] = [min(x,self.scope_info[level][0]),min(y,self.scope_info[level][1]),max(x+1,self.scope_info[level][2]),max(y+1,self.scope_info[level][3])]
+                else:
+                    self.scope_info.append([x,y,x+1,y+1])
             if not new_flag:
                 textures_to_be_treated.remove(i)
             else:
@@ -324,8 +335,13 @@ class TextureFamily:
                 for i in range(2):
                     for j in range(2):
                         self.recursive_pyramid_generation(level=level+1,x=2*x+i,y=2*y+j,textures_to_be_treated=textures_to_be_treated.copy(),level_limiter=level_limiter)
-        
-def prepare_for_unity(data_folder="PeaceVallis",outputs_folder="/home/kuba/Unity/VR-GIS/VR-GIS/NewUnityProject/Projects/"):
+
+    def export_metadata(self):
+        metadata_path = f"{self.reference_dem.export_folder}/texture_family_metadata.json"
+        with open(metadata_path, 'w') as f:
+            json.dump({"levelRanges":self.scope_info}, f, indent=4)
+
+def prepare_for_unity(data_folder="PeaceVallis",outputs_folder="/home/kuba/Unity/VR-GIS/VR-GIS/NewUnityProject/Projects/",texture_manual_nodata=None):
     level_limiter=None#10#8#
     outputs_folder = outputs_folder + data_folder
     os.makedirs(outputs_folder, exist_ok=True)
@@ -334,10 +350,11 @@ def prepare_for_unity(data_folder="PeaceVallis",outputs_folder="/home/kuba/Unity
     texture_files = glob.glob(folder_path + "/Textures/*.tif")
     dem = DEM(DEM_file, outputs_folder)
     dem.prepare(level_limiter=level_limiter)
-    textures = TextureFamily(texture_files,dem,outputs_folder)
+    textures = TextureFamily(texture_files,dem,outputs_folder,manual_nodata=texture_manual_nodata)
     textures.recursive_pyramid_generation(level_limiter=level_limiter)
     for tex in textures.textures:
         tex.export_metadata()
+    textures.export_metadata()
 
 if __name__ == "__main__":
-    prepare_for_unity()#data_folder="Antarctica")
+    prepare_for_unity(texture_manual_nodata=[None,0,None,None])#data_folder="Antarctica")
