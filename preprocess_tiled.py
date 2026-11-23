@@ -337,9 +337,13 @@ class TextureFamily:
                         self.recursive_pyramid_generation(level=level+1,x=2*x+i,y=2*y+j,textures_to_be_treated=textures_to_be_treated.copy(),level_limiter=level_limiter)
 
     def export_metadata(self):
+        flattened=[]
+        for y in self.scope_info:
+            for x in y:
+                flattened.append(x)
         metadata_path = f"{self.reference_dem.export_folder}/texture_family_metadata.json"
         with open(metadata_path, 'w') as f:
-            json.dump({"levelRanges":self.scope_info}, f, indent=4)
+            json.dump({"levelRanges": flattened}, f, indent=4)
 
 def prepare_for_unity(data_folder="PeaceVallis",outputs_folder="/home/kuba/Unity/VR-GIS/VR-GIS/NewUnityProject/Projects/",texture_manual_nodata=None):
     level_limiter=None#10#8#
