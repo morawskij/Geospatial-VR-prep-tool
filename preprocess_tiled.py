@@ -166,6 +166,7 @@ class Texture (georaster):
     def __init__(self, file_path,reference_dem,number,manual_nodata=None):
         super().__init__(file_path)
         self.reference_dem = reference_dem
+        self.pyramid_levels = int(np.ceil(max(0,np.log2(max(self.x*((reference_dem.extent.E-reference_dem.extent.W)/(self.extent.E-self.extent.W))/256, self.y*((reference_dem.extent.N-reference_dem.extent.S)/(self.extent.N-self.extent.S))/256)))+1))
         self.number = number
         self.name = os.path.basename(file_path)
         self.reproject_extent(self.reference_dem.crs.ExportToWkt())
@@ -286,9 +287,9 @@ class Texture (georaster):
             # Save as RGBA image
             img = Image.fromarray(output_data, mode='RGBA')
             img.save(output_path)
-            return min(zoom_factors)<1, True
+            return True
         else:
-            return False, False
+            return False
 
 class TextureFamily:
     def __init__(self,texture_file_list, reference_dem, export_folder,manual_nodata=None):
@@ -319,7 +320,8 @@ class TextureFamily:
         cropping_extent=Extent(W,E,S,N)
         for i in textures_to_be_treated.copy():
             tex = self.textures[i]
-            new_flag, succeesul_generation = tex.export_cropped(self.export_folder+ "/" + str(level) + "/" + str(x) + "_" + str(y) + "_"+ str(i) + ".png",cropping_extent)
+            new_flag = level < tex.pyramid_levels-1
+            succeesul_generation = tex.export_cropped(self.export_folder+ "/" + str(level) + "/" + str(x) + "_" + str(y) + "_"+ str(i) + ".png",cropping_extent)
             if succeesul_generation:
                 if level<len(self.scope_info):
                     self.scope_info[level] = [min(x,self.scope_info[level][0]),min(y,self.scope_info[level][1]),max(x+1,self.scope_info[level][2]),max(y+1,self.scope_info[level][3])]
@@ -327,8 +329,6 @@ class TextureFamily:
                     self.scope_info.append([x,y,x+1,y+1])
             if not new_flag:
                 textures_to_be_treated.remove(i)
-            else:
-                tex.pyramid_levels = level+2
             progression_needed = progression_needed or new_flag           
         if progression_needed:
             if level_limiter is None or level+1 != level_limiter:
@@ -346,7 +346,7 @@ class TextureFamily:
             json.dump({"levelRanges": flattened}, f, indent=4)
 
 def prepare_for_unity(data_folder="PeaceVallis",outputs_folder="/home/kuba/Unity/VR-GIS/VR-GIS/NewUnityProject/Projects/",texture_manual_nodata=None):
-    level_limiter=None#10#8#
+    level_limiter=None
     outputs_folder = outputs_folder + data_folder
     os.makedirs(outputs_folder, exist_ok=True)
     folder_path="./Projects/" + data_folder
