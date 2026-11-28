@@ -346,7 +346,7 @@ class TextureFamily:
             json.dump({"levelRanges": flattened}, f, indent=4)
 
 def prepare_for_unity(data_folder="PeaceVallis",outputs_folder="/home/kuba/Unity/VR-GIS/VR-GIS/NewUnityProject/Projects/",texture_manual_nodata=None):
-    level_limiter=None
+    level_limiter=None#10#8#
     outputs_folder = outputs_folder + data_folder
     os.makedirs(outputs_folder, exist_ok=True)
     folder_path="./Projects/" + data_folder
@@ -361,4 +361,5 @@ def prepare_for_unity(data_folder="PeaceVallis",outputs_folder="/home/kuba/Unity
     textures.export_metadata()
 
 if __name__ == "__main__":
-    prepare_for_unity(texture_manual_nodata=[None,0,None,None])#data_folder="Antarctica")
+    prepare_for_unity(texture_manual_nodata=[None,0,None,None])
+    prepare_for_unity(data_folder="Antarctica")
